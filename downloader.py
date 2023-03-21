@@ -1,119 +1,56 @@
-# Imports
-from __future__ import unicode_literals
-import youtube_dl
-from plyer import notification
-# from playsound import playsound
+# SOURCE : https://gist.github.com/lanfon72/7284f83552eb871220804f8ee850fe0e
+# Thanks to lanfon72 for making this
+import asyncio
+from datetime import datetime
+from functools import partial
+from concurrent.futures import ProcessPoolExecutor
 
-class Logger(object):
-    # Ignore debugs and warnings, but print errors.
-    def debug(self, msg):
-        pass
+from youtube_dl import YoutubeDL as YDL
 
-    def warning(self, msg):
-        pass
-
-    def error(self, msg):
-        print(msg)
-
-def default_hook(d):
-    if d["status"] == "finished":
-        # APP_ICON_LOCATION = "./RESOURCES/APP_ICON.ico"
-        # # AUDIO_LOCATION = "./RESOURCES/NOTIF_AUDIO.mp3"
-        # # playsound(AUDIO_LOCATION)
-        # notification.notify(
-        #     app_name='YTDownloader',
-        #     title="Download Complete!",
-        #     message="Check your output folder.",
-        #     app_icon = APP_ICON_LOCATION,
-        #     timeout = 5
-        # )
-        print("Status is Finished")
-
-def playlist_check(result):
-    if 'entries' in result:
-        return True
-    return False
-
-def download(url : str, SAVE_PATH : str, type : str, quality : str, hook=None, download_all : bool = False):
-    print("Beginning download for: " + url)
-
-    hook = hook or default_hook
-
-    ydl_opts = {
-    'format': 'bestaudio/best',
-    'postprocessors': [{
-        'key': 'FFmpegExtractAudio',
-        'preferredcodec': 'mp3',
-        'preferredquality': '192',
-    }],
-    'logger': Logger(),
-    'progress_hooks': [hook],
-    }
+PPE = ProcessPoolExecutor()
 
 
-    with youtube_dl.YoutubeDL(ydl_opts) as ydl:
-        result = ydl.extract_info(url,download=False)
+def extract_info(url, quiet=False):
+    # use `quiet=True` to avoid noisy
+    return YDL(dict(quiet=quiet)).extract_info(url, download=False)
 
-    is_playlist = playlist_check(result=result)
-    video = result["entries"][0] if is_playlist and download_all == False else result
 
-    if (quality != 'best') and (quality != "worst"):
-        raise Exception(f"Incorrect quality type | Best or Worst only, but was given {quality}")
-    
-    if type == "audio":
-        ydl_opts = {
-        'format': f'{quality}audio/{quality}',
-        'postprocessors': [{
-            'key': 'FFmpegExtractAudio',
-            'preferredcodec': 'mp3',
-            'preferredquality': '192',
-        }],
-        # 'logger': Logger(),
-        'progress_hooks': [hook],
-        'outtmpl': SAVE_PATH + '/%(title)s.%(ext)s'
-        }
-    elif type == "video":
-        ydl_opts = {
-            'format': f'{quality}video[ext=mp4]+{quality}audio[ext=mp4]/mp4+{quality}[height<=480]',
-            # "logger": Logger(),
-            'progress_hooks': [hook],
-            "outtmpl": SAVE_PATH + '/%(title)s.%(ext)s'
-            }
-    else:
-        raise Exception(f"Incorrect file type | Audio or Video only, but was given {type}")
-    with youtube_dl.YoutubeDL(ydl_opts) as ydl:
-        if is_playlist == True:
-            count = 0
-            for i in video["entries"]:
-                count = count + 1
-                print("Downloading video " + str(count))
-                i = "https://youtu.be/" + i.get("id")
-                ydl.download([i])
-        else:
-            ydl.download([url])
+async def flatten_urls(*urls, loop=None):
+    print(f"trying to flat {len(urls)} URLs.")
+    loop = asyncio.get_event_loop()
+    futs = [loop.run_in_executor(PPE, extract_info, url) for url in urls]
+    infos = await asyncio.gather(*futs)
 
-def get_data(url: str):
-    ydl_opts = {
-    'format': 'bestaudio/best',
-    'postprocessors': [{
-        'key': 'FFmpegExtractAudio',
-        'preferredcodec': 'mp3',
-        'preferredquality': '192',
-    }],
-    'logger': Logger(),
-    'progress_hooks': [default_hook]
-    }
+    urlmatrix = [i.get('entries', [i]) for i in infos]
+    return [u.get('webpage_url', "") for urls in urlmatrix for u in urls]
 
-    with youtube_dl.YoutubeDL(ydl_opts) as ydl:
-        result = ydl.extract_info(url,download=False)
 
-    # Checks if this is a playlist
-    if 'entries' in result:
-        print("Playlist provided!")
-        print("Grabbing first video.")
+async def progress(*urls, loop=None):
+    loop = loop or asyncio.get_event_loop()
+    print(f"{len(urls)} URLs will be progress.")
+    pure_urls = await flatten_urls(*urls, loop=loop)
+    print(pure_urls)
+    futs = [loop.run_in_executor(None, YDL().download, [url]) for url in pure_urls]
+    return await asyncio.gather(*futs)
 
-        video = result['entries'][0]
-    else:
-        video = result
 
-    return video
+async def keep_noise():
+    while True:
+        await asyncio.sleep(1)
+        print(f"Time is: {datetime.now()}", flush=True)
+
+
+def main():
+    u1 = ["https://youtu.be/-JNeBKlG0cI",
+          "https://youtu.be/mVEItYOsXjM",
+          "https://youtu.be/0JoMqP5UwQ8"]
+    u2 = ["https://youtu.be/m3gLNa-fx_w"]
+    u3 = ["https://www.youtube.com/watch?v=sm4BID47dTI&list=PLFWyAXHl5a6ffjKkNGu27BEk1US055MzB"]
+    loop = asyncio.get_event_loop()
+
+    coros = [progress(*u1), progress(*u2), progress(*u3), keep_noise()]
+    loop.run_until_complete(asyncio.gather(*coros))
+
+
+if __name__ == '__main__':
+    main()
